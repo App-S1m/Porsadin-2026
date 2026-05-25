@@ -1,0 +1,1675 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  Home, FileText, Users, Calendar, Trophy, Settings, LogOut, 
+  Check, X, Trash2, Edit3, Edit, Eye, Printer, AlertCircle, Rocket, Search, UserCheck, Shield, UploadCloud, ChevronDown
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, onSnapshot, doc, setDoc, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+
+// --- FIREBASE INIT ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// Helper for Firestore Paths
+const getCollection = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
+const getDocRef = (colName, docId) => doc(db, 'artifacts', appId, 'public', 'data', colName, docId);
+
+// --- CONSTANTS ---
+const LOMBA_MAPPING = {
+  "Tahfidz Juz Amma": "TJA",
+  "MQK Safinatunnaja": "MQK",
+  "Cerdas cermat Diniyyah": "CCD",
+  "Pidato Bahasa Indonesia": "PBI",
+  "Pidato Bahasa Arab": "PBA",
+  "MTQ": "MTQ",
+  "Murotal Wal Imla'": "MWI",
+  "Kaligrafi": "KGF",
+  "Puisi Islami": "PIS",
+  "Lari Sprint 100 M": "LSP",
+  "Bulu Tangkis Single": "BTS",
+  "Tenis Meja Single": "TMJ",
+  "Sholawat": "SLW",
+  "Adzan": "ADZ",
+  "Hafalan Nadhom Aqidatul Awam": "NAW",
+  "Pidato Bahasa Jawa": "PBJ"
+};
+const LOMBA_LIST = Object.keys(LOMBA_MAPPING);
+
+// --- MAIN APP COMPONENT ---
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [session, setSession] = useState({ role: 'public', data: null }); // 'public', 'panitia', 'koordinator'
+  const [view, setView] = useState('beranda'); // For public navigation
+  const [showLogin, setShowLogin] = useState(false);
+  const [loginType, setLoginType] = useState('panitia'); // 'panitia' or 'koordinator'
+
+  // Data States
+  const [settings, setSettings] = useState({ isOpen: true, minBirthDate: '2011-01-01' });
+  const [registrations, setRegistrations] = useState([]);
+  const [coordinators, setCoordinators] = useState([]);
+  const [schedules, setSchedules] = useState([]);
+  const [results, setResults] = useState([]);
+
+  // Init Firebase Auth
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Auth error:", error);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // Fetch Data
+  useEffect(() => {
+    if (!user) return;
+
+    const unsubSettings = onSnapshot(getCollection('settings'), (snap) => {
+      let sett = { isOpen: true, minBirthDate: '2011-01-01' };
+      snap.forEach(doc => {
+        if (doc.id === 'main') sett = doc.data();
+      });
+      setSettings(sett);
+    }, console.error);
+
+    const unsubRegs = onSnapshot(getCollection('registrations'), (snap) => {
+      setRegistrations(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, console.error);
+
+    const unsubCoords = onSnapshot(getCollection('coordinators'), (snap) => {
+      setCoordinators(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, console.error);
+
+    const unsubSchedules = onSnapshot(getCollection('schedules'), (snap) => {
+      setSchedules(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, console.error);
+
+    const unsubResults = onSnapshot(getCollection('results'), (snap) => {
+      setResults(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, console.error);
+
+    return () => { unsubSettings(); unsubRegs(); unsubCoords(); unsubSchedules(); unsubResults(); };
+  }, [user]);
+
+  // Login Handler
+  const handleLogin = (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    if (loginType === 'panitia') {
+      const u = fd.get('username');
+      const p = fd.get('password');
+      if (u === 'admin' && p === 'admin') {
+        setSession({ role: 'panitia', data: { name: 'Admin Panitia' } });
+        setShowLogin(false);
+      } else {
+        alert('Username atau password salah!');
+      }
+    } else {
+      const wa = fd.get('waNumber');
+      const coord = coordinators.find(c => c.waNumber === wa);
+      if (coord) {
+        setSession({ role: 'koordinator', data: coord });
+        setShowLogin(false);
+      } else {
+        alert('Nomor WA tidak terdaftar sebagai koordinator!');
+      }
+    }
+  };
+
+  const handleLogout = () => {
+    setSession({ role: 'public', data: null });
+    setView('beranda');
+  };
+
+  if (!user) return <div className="flex h-screen items-center justify-center bg-[#175e38] text-white">Memuat Sistem...</div>;
+
+  return (
+    <div className="min-h-screen bg-gray-50 text-gray-800 font-sans">
+      {session.role === 'public' && (
+        <PublicView 
+          view={view} setView={setView} 
+          setShowLogin={setShowLogin} setLoginType={setLoginType}
+          settings={settings} registrations={registrations} schedules={schedules} results={results}
+        />
+      )}
+      {session.role === 'panitia' && <PanitiaView onLogout={handleLogout} data={{settings, registrations, coordinators, schedules, results}} />}
+      {session.role === 'koordinator' && <KoordinatorView onLogout={handleLogout} session={session} data={{registrations, results}} />}
+
+      {/* Login Modal */}
+      {showLogin && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md relative">
+            <button onClick={() => setShowLogin(false)} className="absolute top-4 right-4 text-gray-500 hover:text-gray-800">
+              <X size={24} />
+            </button>
+            <h2 className="text-2xl font-bold text-center text-[#175e38] mb-2">
+              Login {loginType === 'panitia' ? 'Panitia' : 'Koordinator'}
+            </h2>
+            <p className="text-center text-sm text-gray-500 mb-6">
+              {loginType === 'panitia' 
+                ? 'Silakan masuk menggunakan akun admin Anda.' 
+                : 'Silakan masuk menggunakan nomor WhatsApp Anda.'}
+            </p>
+
+            <form onSubmit={handleLogin} className="space-y-4">
+              {loginType === 'panitia' ? (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                    <input type="text" name="username" required className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:border-[#175e38] focus:ring-1 focus:ring-[#175e38]" placeholder="Masukkan admin" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                    <input type="password" name="password" required className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:border-[#175e38] focus:ring-1 focus:ring-[#175e38]" placeholder="Masukkan admin" />
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nomor WhatsApp</label>
+                  <input type="text" name="waNumber" required className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:border-[#175e38] focus:ring-1 focus:ring-[#175e38]" placeholder="0812xxxxxxx" />
+                  <p className="text-xs text-gray-500 mt-2">*Gunakan nomor WA yang didaftarkan oleh panitia.</p>
+                </div>
+              )}
+              <button type="submit" className="w-full bg-[#175e38] hover:bg-[#11462a] text-white font-bold py-3 px-4 rounded-lg transition-colors">
+                Masuk
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- PUBLIC VIEW COMPONENTS ---
+function PublicView({ view, setView, setShowLogin, setLoginType, settings, registrations, schedules, results }) {
+  const openLogin = (type) => {
+    setLoginType(type);
+    setShowLogin(true);
+  };
+
+  return (
+    <div className="flex flex-col min-h-screen bg-gray-50">
+      {/* Navbar - Matching the design (hidden when printing) */}
+      <nav className="print:hidden bg-[#175e38] text-white px-6 py-4 flex flex-col md:flex-row justify-between items-center shadow-md">
+        <div className="flex items-center space-x-8 w-full md:w-auto overflow-x-auto pb-2 md:pb-0">
+          <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setView('beranda')}>
+            <div className="w-8 h-8 bg-white rounded-full flex items-center justify-center p-1">
+              <Shield size={20} className="text-[#175e38]" />
+            </div>
+            <span className="font-bold text-xl tracking-wide">PORSADIN 2026</span>
+          </div>
+          <div className="hidden md:flex space-x-6 text-sm font-medium">
+            <button onClick={() => setView('beranda')} className={`hover:text-yellow-300 transition-colors ${view==='beranda'?'text-yellow-400':''}`}>Beranda</button>
+            <button onClick={() => setView('pendaftaran')} className={`hover:text-yellow-300 transition-colors ${view==='pendaftaran'?'text-yellow-400':''}`}>Pendaftaran</button>
+            <button onClick={() => setView('cek')} className={`hover:text-yellow-300 transition-colors ${view==='cek'?'text-yellow-400':''}`}>Cek Peserta</button>
+            <button onClick={() => setView('jadwal')} className={`hover:text-yellow-300 transition-colors ${view==='jadwal'?'text-yellow-400':''}`}>Jadwal Kegiatan</button>
+            <button onClick={() => setView('hasil')} className={`hover:text-yellow-300 transition-colors ${view==='hasil'?'text-yellow-400':''}`}>Hasil Lomba</button>
+          </div>
+        </div>
+        <div className="flex items-center space-x-4 mt-4 md:mt-0 text-sm">
+          <button onClick={() => openLogin('koordinator')} className="flex items-center space-x-1 hover:text-yellow-300 transition-colors">
+            <UserCheck size={16} /> <span>Koordinator</span>
+          </button>
+          <button onClick={() => openLogin('panitia')} className="flex items-center space-x-1 bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-full transition-colors">
+            <Shield size={16} /> <span>Panitia</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* Main Content Area */}
+      <main className="flex-grow">
+        {view === 'beranda' && (
+          <div className="bg-[#175e38] text-white min-h-[85vh] flex items-center">
+            <div className="container mx-auto px-6 py-12 flex flex-col md:flex-row items-center justify-between">
+              {/* Left Side */}
+              <div className="md:w-1/2 mb-10 md:mb-0">
+                <div className="inline-flex items-center space-x-2 bg-white text-[#175e38] px-4 py-1.5 rounded-full font-semibold text-sm mb-6">
+                  <span>★ Pendaftaran Porsadin Tahun Ajaran 2026/2027</span>
+                </div>
+                <h1 className="text-5xl md:text-7xl font-extrabold leading-tight mb-6">
+                  Wujudkan Impian <br/>
+                  <span className="text-gray-300">Generasi Rabbani<br/>Terbaik</span>
+                </h1>
+                <p className="text-lg mb-8 max-w-lg text-gray-200">
+                  Pekan Olahraga dan Seni Antar Diniyah (PORSADIN) 2026. Daftar sekarang dan tunjukkan bakat terbaik santri Diniyah Takmiliyah!
+                </p>
+                <div className="flex space-x-4">
+                  <button onClick={() => setView('pendaftaran')} className="bg-white text-[#175e38] hover:bg-gray-100 font-bold py-3 px-6 rounded-full flex items-center space-x-2 transition-transform transform hover:scale-105 shadow-lg">
+                    <Rocket size={18} /> <span>Daftar Sekarang</span>
+                  </button>
+                  <button onClick={() => setView('cek')} className="border-2 border-white hover:bg-white/10 font-bold py-3 px-6 rounded-full flex items-center space-x-2 transition-colors">
+                    <Search size={18} /> <span>Cek Status</span>
+                  </button>
+                </div>
+              </div>
+              
+              {/* Right Side - Logo Card */}
+              <div className="md:w-5/12 flex justify-center">
+                <div className="bg-[#217747] p-10 rounded-[2rem] shadow-2xl flex flex-col items-center border border-[#2a9259]">
+                  {/* Pseudo Kemenag/Porsadin Logo */}
+                  <div className="relative w-48 h-48 mb-6 bg-[#fcd34d] rounded-full flex flex-col items-center justify-center p-4 shadow-inner border-4 border-white">
+                     <Trophy size={80} className="text-[#175e38] mb-2" />
+                     <div className="text-center font-bold text-[#175e38] text-[10px] leading-tight">IKHLAS BERAMAL</div>
+                  </div>
+                  <h2 className="text-3xl font-extrabold tracking-wide mb-2">PORSADIN 2026</h2>
+                  <p className="text-green-100 font-medium tracking-widest text-sm uppercase">Sportif, Inovatif, Islami</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {view === 'pendaftaran' && (
+          <PublicRegistration settings={settings} LombaList={LOMBA_LIST} registrations={registrations} />
+        )}
+
+        {view === 'cek' && (
+          <div className="container mx-auto px-6 py-12 max-w-3xl">
+            <h2 className="text-3xl font-bold text-[#175e38] mb-6 text-center">Cek Status Pendaftaran</h2>
+            <div className="bg-white p-6 rounded-2xl shadow-lg">
+              <PublicCheckStatus registrations={registrations} />
+            </div>
+          </div>
+        )}
+
+        {view === 'jadwal' && (
+           <div className="container mx-auto px-6 py-12 max-w-5xl">
+             <h2 className="text-3xl font-bold text-[#175e38] mb-8 text-center">Jadwal Kegiatan PORSADIN 2026</h2>
+             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+               {schedules.length === 0 ? <p className="col-span-full text-center text-gray-500">Jadwal belum tersedia.</p> : null}
+               {schedules.sort((a,b) => a.timestamp - b.timestamp).map(s => {
+                 const today = new Date();
+                 today.setHours(0,0,0,0);
+                 // Gunakan endDate jika ada, atau fallback ke date lama
+                 const scheduleDate = new Date(s.endDate || s.date);
+                 const isPast = scheduleDate < today;
+
+                 return (
+                   <div key={s.id} className={`bg-white p-6 rounded-2xl border transition-all duration-300 ${isPast ? 'border-gray-200 opacity-50 grayscale' : 'border-t-4 border-t-[#175e38] shadow-lg shadow-green-100'}`}>
+                     <h3 className={`text-lg font-bold mb-3 ${isPast ? 'text-gray-500' : 'text-gray-800'}`}>{s.title}</h3>
+                     
+                     <div className="space-y-1">
+                       <p className={`text-sm ${isPast ? 'text-gray-400' : 'text-gray-600'}`}>
+                         {s.startDate && s.endDate 
+                           ? `${s.startDate} s/d ${s.endDate}` 
+                           : new Date(s.date).toLocaleDateString('id-ID')}
+                       </p>
+                       <p className={`text-sm ${isPast ? 'text-gray-400' : 'text-gray-500'}`}>{s.location}</p>
+                     </div>
+                     
+                     {s.description && (
+                       <p className={`text-xs mt-4 pt-3 border-t ${isPast ? 'text-gray-400 border-gray-100' : 'text-gray-500 border-gray-100'}`}>
+                         {s.description}
+                       </p>
+                     )}
+                   </div>
+                 )
+               })}
+             </div>
+           </div>
+        )}
+
+        {view === 'hasil' && (
+          <div className="container mx-auto px-6 py-12 max-w-5xl">
+            <h2 className="text-3xl font-bold text-[#175e38] mb-8 text-center">Hasil Perlombaan</h2>
+            <div className="grid md:grid-cols-2 gap-6">
+              {LOMBA_LIST.map(lomba => {
+                const resultsPutra = results.filter(r => r.competition === `${lomba} Putra`).sort((a, b) => a.rank - b.rank);
+                const resultsPutri = results.filter(r => r.competition === `${lomba} Putri`).sort((a, b) => a.rank - b.rank);
+                
+                if (resultsPutra.length === 0 && resultsPutri.length === 0) return null;
+
+                const renderResultList = (resList, title) => {
+                  if (resList.length === 0) return null;
+                  return (
+                    <div className="mt-4">
+                      <h4 className="text-sm font-bold text-gray-600 uppercase tracking-wider mb-3 border-b pb-1">{title}</h4>
+                      <ul className="space-y-3">
+                        {resList.map(res => {
+                          const reg = registrations.find(r => r.id === res.registrationId);
+                          if(!reg) return null;
+                          return (
+                            <li key={res.id} className="flex items-center p-3 bg-gray-50 rounded-lg">
+                              <span className={`w-8 h-8 flex items-center justify-center rounded-full font-bold mr-4 ${res.rank === 1 ? 'bg-yellow-400 text-white' : res.rank === 2 ? 'bg-gray-300 text-gray-700' : res.rank === 3 ? 'bg-amber-600 text-white' : 'bg-green-100 text-[#175e38]'}`}>
+                                {res.rank}
+                              </span>
+                              <div>
+                                <p className="font-bold text-gray-800">{reg.name}</p>
+                                <p className="text-xs text-gray-500">{reg.madrasah}</p>
+                              </div>
+                              <div className="ml-auto font-semibold text-[#175e38]">Nilai: {res.score}</div>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </div>
+                  );
+                };
+
+                return (
+                  <div key={lomba} className="bg-white p-6 rounded-xl shadow-md border-t-4 border-[#175e38]">
+                    <h3 className="text-xl font-bold text-gray-800">{lomba}</h3>
+                    {renderResultList(resultsPutra, "Kategori Putra")}
+                    {renderResultList(resultsPutri, "Kategori Putri")}
+                  </div>
+                )
+              })}
+            </div>
+            {results.length === 0 && <p className="text-center text-gray-500">Belum ada hasil lomba yang diumumkan.</p>}
+          </div>
+        )}
+      </main>
+
+      {/* Footer (hidden when printing) */}
+      <footer className="print:hidden bg-[#0f4025] text-center py-6 text-green-100/70 text-sm">
+        <div className="container mx-auto">
+          <p>&copy; 2026 Panitia PORSADIN Kemenag. Hak Cipta Dilindungi Undang-Undang.</p>
+          <p className="mt-1 text-xs">Aplikasi Pendaftaran & Sistem Informasi PORSADIN</p>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function PublicRegistration({ settings, LombaList, registrations }) {
+  const [loading, setLoading] = useState(false);
+  const [successData, setSuccessData] = useState(null);
+
+  if (!settings.isOpen) {
+    return (
+      <div className="flex items-center justify-center min-h-[70vh]">
+        <div className="bg-white p-10 rounded-2xl shadow-xl text-center max-w-md">
+          <AlertCircle size={64} className="mx-auto text-amber-500 mb-4" />
+          <h2 className="text-2xl font-bold text-gray-800 mb-2">Pendaftaran Ditutup</h2>
+          <p className="text-gray-600">Mohon maaf, pendaftaran PORSADIN 2026 saat ini sedang ditutup. Silakan pantau terus informasi selanjutnya.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    const fd = new FormData(e.target);
+    
+    // Generate Registration Code
+    const comp = fd.get('competition');
+    const prefix = LOMBA_MAPPING[comp] || 'UMM';
+    const existingCount = registrations.filter(r => r.competition === comp).length;
+    const seqNumber = String(existingCount + 1).padStart(3, '0'); // Pad with zeros to make it 3 digits
+    const registrationCode = `${prefix}-${seqNumber}`;
+
+    // Get File Name (Simulate file upload storage by saving the file name)
+    const fileAkta = fd.get('fileAkta');
+    const fileName = fileAkta && fileAkta.name ? fileAkta.name : 'Tidak dilampirkan';
+
+    const data = {
+      registrationCode: registrationCode,
+      name: fd.get('name'),
+      tempatLahir: fd.get('tempatLahir'),
+      birthDate: fd.get('birthDate'),
+      gender: fd.get('gender'),
+      alamatSantri: fd.get('alamatSantri'),
+      madrasah: fd.get('madrasah'),
+      alamatMadrasah: fd.get('alamatMadrasah'),
+      competition: comp,
+      fileNameAkta: fileName,
+      status: 'Menunggu',
+      note: '',
+      timestamp: Date.now()
+    };
+
+    try {
+      await addDoc(getCollection('registrations'), data);
+      setSuccessData(data);
+    } catch (err) {
+      alert('Terjadi kesalahan saat mendaftar.');
+    }
+    setLoading(false);
+  };
+
+  // Tampilan "View Data" / Bukti Pendaftaran Setelah Berhasil
+  if (successData) {
+    return (
+      <div className="container mx-auto px-4 py-8 max-w-3xl print:p-0 print:m-0 print:max-w-full">
+        <div className="bg-white p-8 md:p-10 rounded-2xl shadow-xl border-t-8 border-[#175e38] print:shadow-none print:border-none print:rounded-none">
+          
+          <div className="text-center mb-6 pb-6 border-b-2 border-[#175e38]">
+            <h2 className="text-3xl font-extrabold text-[#175e38] uppercase">Tanda Bukti Pendaftaran</h2>
+            <h3 className="text-lg font-semibold text-gray-700">Pekan Olahraga dan Seni Antar Diniyah (PORSADIN) 2026</h3>
+          </div>
+
+          <div className="bg-green-50 border border-green-200 rounded-xl p-6 mb-8 text-center print:bg-white print:border-2 print:border-gray-800">
+            <p className="text-sm font-semibold text-gray-600 uppercase tracking-widest mb-1">Nomor Pendaftaran Anda</p>
+            <p className="text-4xl md:text-5xl font-extrabold text-[#175e38] tracking-wider print:text-black">{successData.registrationCode}</p>
+            <p className="text-xs text-green-700 mt-3 font-medium print:hidden">Simpan nomor ini untuk mengecek status pendaftaran Anda.</p>
+          </div>
+
+          <div className="mb-8">
+            <h4 className="text-lg font-bold text-gray-800 mb-4 border-b pb-2">Detail Santri & Pendaftaran</h4>
+            <table className="w-full text-left border-collapse text-sm md:text-base">
+              <tbody>
+                <tr className="border-b"><th className="py-3 w-1/3 text-gray-600 align-top">Nama Santri</th><td className="py-3 font-bold text-gray-900 align-top">{successData.name}</td></tr>
+                <tr className="border-b"><th className="py-3 text-gray-600 align-top">Tempat, Tgl Lahir</th><td className="py-3 align-top">{successData.tempatLahir}, {new Date(successData.birthDate).toLocaleDateString('id-ID')}</td></tr>
+                <tr className="border-b"><th className="py-3 text-gray-600 align-top">Jenis Kelamin</th><td className="py-3 align-top">{successData.gender}</td></tr>
+                <tr className="border-b"><th className="py-3 text-gray-600 align-top">Alamat Santri</th><td className="py-3 align-top">{successData.alamatSantri}</td></tr>
+                <tr className="border-b"><th className="py-3 text-gray-600 align-top">Asal Madrasah</th><td className="py-3 font-semibold text-gray-800 align-top">{successData.madrasah}</td></tr>
+                <tr className="border-b"><th className="py-3 text-gray-600 align-top">Alamat Madrasah</th><td className="py-3 align-top">{successData.alamatMadrasah}</td></tr>
+                <tr className="border-b"><th className="py-3 text-gray-600 align-top">Cabang Lomba</th><td className="py-3 font-bold text-lg text-[#175e38] align-top print:text-black">{successData.competition}</td></tr>
+                <tr className="border-b"><th className="py-3 text-gray-600 align-top">Dokumen Akta</th><td className="py-3 text-gray-500 italic align-top">{successData.fileNameAkta}</td></tr>
+                <tr><th className="py-3 text-gray-600 align-top">Waktu Daftar</th><td className="py-3 align-top">{new Date(successData.timestamp).toLocaleString('id-ID')}</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex flex-col sm:flex-row justify-center gap-4 mt-8 print:hidden">
+            <button onClick={() => window.print()} className="bg-[#175e38] hover:bg-[#11462a] text-white font-bold py-3 px-6 rounded-lg flex items-center justify-center transition-colors shadow-md">
+              <Printer size={20} className="mr-2" /> Cetak / Download PDF
+            </button>
+            <button onClick={() => setSuccessData(null)} className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 px-6 rounded-lg transition-colors text-center">
+              Selesai & Kembali
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const fmtDate = new Date(settings.minBirthDate).toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' });
+
+  return (
+    <div className="container mx-auto px-6 py-12 max-w-4xl">
+      <div className="bg-white p-8 rounded-2xl shadow-xl border-t-8 border-[#175e38]">
+        <h2 className="text-3xl font-bold text-[#175e38] mb-2 text-center">Formulir Pendaftaran</h2>
+        <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg mb-8 text-sm text-center max-w-xl mx-auto">
+          <AlertCircle size={16} className="inline mr-2 -mt-1" />
+          Batas usia tertua: Kelahiran <strong>{fmtDate}</strong> atau setelahnya (lebih muda diperbolehkan).
+        </div>
+        
+        <form onSubmit={handleSubmit} className="space-y-6">
+          
+          {/* Bagian Data Santri */}
+          <div className="bg-gray-50 p-6 rounded-xl border border-gray-100">
+            <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center"><Users size={20} className="mr-2 text-[#175e38]"/> Data Diri Santri</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Nama Lengkap Santri</label>
+                <input type="text" name="name" required placeholder="Sesuai Akta Kelahiran" className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#175e38]" />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Tempat Lahir</label>
+                  <input type="text" name="tempatLahir" required placeholder="Kabupaten/Kota Tempat Lahir" className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#175e38]" />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Tanggal Lahir</label>
+                  <input type="date" name="birthDate" required min={settings.minBirthDate} max={new Date().toISOString().split('T')[0]} className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#175e38]" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Jenis Kelamin</label>
+                <select name="gender" required className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#175e38]">
+                  <option value="">Pilih...</option>
+                  <option value="Laki-laki">Laki-laki</option>
+                  <option value="Perempuan">Perempuan</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Alamat Lengkap Santri</label>
+                <textarea name="alamatSantri" required rows="2" placeholder="Jalan, RT/RW, Desa/Kelurahan..." className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#175e38]"></textarea>
+              </div>
+            </div>
+          </div>
+
+          {/* Bagian Data Madrasah & Lomba */}
+          <div className="bg-gray-50 p-6 rounded-xl border border-gray-100">
+            <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center"><Home size={20} className="mr-2 text-[#175e38]"/> Asal & Pilihan Lomba</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Asal Madrasah / Diniyah</label>
+                <input type="text" name="madrasah" required placeholder="Nama Madrasah Diniyah Takmiliyah" className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#175e38]" />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Alamat Madrasah</label>
+                <textarea name="alamatMadrasah" required rows="2" placeholder="Alamat lengkap Madrasah..." className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#175e38]"></textarea>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Cabang Lomba</label>
+                <select name="competition" required className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#175e38] bg-white font-medium text-[#175e38]">
+                  <option value="">Pilih Cabang Lomba...</option>
+                  {LombaList.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Bagian Upload Dokumen */}
+          <div className="bg-blue-50 p-6 rounded-xl border border-blue-100">
+            <h3 className="text-xl font-bold text-blue-800 mb-4 flex items-center"><UploadCloud size={20} className="mr-2"/> Upload Dokumen</h3>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">Upload Scan/Foto Akta Kelahiran</label>
+              <input type="file" name="fileAkta" accept="image/*,.pdf" required className="w-full border border-gray-300 bg-white rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-[#175e38] file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-[#175e38] file:text-white hover:file:bg-[#11462a]" />
+              <p className="text-xs text-gray-500 mt-2">Format: JPG, PNG, atau PDF. Maksimal 2MB.</p>
+            </div>
+          </div>
+
+          <button type="submit" disabled={loading} className="w-full bg-[#175e38] hover:bg-[#11462a] text-white font-bold py-4 px-4 rounded-xl transition-colors mt-4 text-xl shadow-lg flex items-center justify-center">
+            {loading ? 'Memproses Data...' : <><Check size={24} className="mr-2"/> Kirim Pendaftaran</>}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function PublicCheckStatus({ registrations }) {
+  const [search, setSearch] = useState('');
+  const [result, setResult] = useState(null);
+
+  const handleSearch = (e) => {
+    e.preventDefault();
+    const found = registrations.filter(r => 
+      r.name.toLowerCase().includes(search.toLowerCase()) || 
+      r.madrasah.toLowerCase().includes(search.toLowerCase()) ||
+      (r.registrationCode && r.registrationCode.toLowerCase().includes(search.toLowerCase()))
+    );
+    setResult(found);
+  };
+
+  return (
+    <div>
+      <form onSubmit={handleSearch} className="flex gap-2 mb-6">
+        <input 
+          type="text" value={search} onChange={e=>setSearch(e.target.value)} required
+          placeholder="Masukkan Nama, Madrasah, atau No. Daftar..." 
+          className="flex-grow border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#175e38]"
+        />
+        <button type="submit" className="bg-[#175e38] hover:bg-[#11462a] text-white px-6 rounded-lg font-semibold flex items-center">
+          <Search size={18} className="mr-2"/> Cari
+        </button>
+      </form>
+
+      {result && result.length === 0 && <p className="text-center text-red-500 font-medium p-4 bg-red-50 rounded-lg">Data tidak ditemukan.</p>}
+      
+      {result && result.length > 0 && (
+        <div className="space-y-4">
+          {result.map(reg => (
+             <div key={reg.id} className="border border-gray-200 rounded-xl p-4 flex flex-col md:flex-row justify-between items-start md:items-center">
+               <div>
+                 <h4 className="font-bold text-lg text-gray-800">
+                   {reg.name} <span className="text-sm font-normal text-gray-500 ml-2">({reg.registrationCode || '-'})</span>
+                 </h4>
+                 <p className="text-sm text-gray-600">{reg.madrasah} | Lomba: {reg.competition}</p>
+               </div>
+               <div className="mt-3 md:mt-0 text-right w-full md:w-auto">
+                 <span className={`inline-block px-4 py-1.5 rounded-full text-sm font-bold ${
+                   reg.status === 'Diterima' ? 'bg-green-100 text-green-700' :
+                   reg.status === 'Ditolak' ? 'bg-red-100 text-red-700' :
+                   reg.status === 'Diperbaiki' ? 'bg-amber-100 text-amber-700' :
+                   'bg-blue-100 text-blue-700'
+                 }`}>
+                   Status: {reg.status}
+                 </span>
+                 {reg.note && reg.status === 'Diperbaiki' && (
+                   <p className="text-xs text-amber-700 mt-2 p-2 bg-amber-50 rounded italic border border-amber-200">Catatan: {reg.note}</p>
+                 )}
+               </div>
+             </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// --- PANITIA (ADMIN) VIEW ---
+function PanitiaView({ onLogout, data }) {
+  const [activeMenu, setActiveMenu] = useState('dashboard');
+  const [isLaporanOpen, setIsLaporanOpen] = useState(false); // State untuk menu Laporan
+  
+  const menuItems = [
+    { id: 'dashboard', icon: Home, label: 'Dashboard' },
+    { id: 'pendaftar', icon: Users, label: 'Pendaftar' },
+    { id: 'jadwal', icon: Calendar, label: 'Jadwal' },
+    { id: 'hasil', icon: Trophy, label: 'Hasil Lomba' },
+    { id: 'koordinator', icon: UserCheck, label: 'Koordinator' },
+    { 
+      id: 'laporan', icon: Printer, label: 'Laporan', 
+      subItems: [
+        { id: 'laporan-pendaftar', label: 'Pendaftar' },
+        { id: 'laporan-hasil', label: 'Hasil Lomba' },
+        { id: 'laporan-koordinator', label: 'Koordinator' }
+      ] 
+    },
+    { id: 'pengaturan', icon: Settings, label: 'Pengaturan' },
+  ];
+
+  return (
+    <div className="flex h-screen bg-gray-100 overflow-hidden">
+      {/* Sidebar - hidden when printing */}
+      <aside className="w-64 bg-[#0f4025] text-white flex flex-col no-print">
+        <div className="p-6 text-center border-b border-white/10">
+          <Shield size={40} className="mx-auto mb-2 text-yellow-400" />
+          <h2 className="font-bold text-xl tracking-wider">PANITIA</h2>
+          <p className="text-xs text-gray-300">PORSADIN 2026</p>
+        </div>
+        <nav className="flex-grow py-4 overflow-y-auto custom-scrollbar">
+          {menuItems.map(m => {
+            if (m.subItems) {
+              return (
+                <div key={m.id}>
+                  <button 
+                    onClick={() => setIsLaporanOpen(!isLaporanOpen)}
+                    className={`w-full flex items-center px-6 py-3 text-sm font-medium transition-colors ${activeMenu.startsWith('laporan') ? 'bg-[#175e38] border-l-4 border-yellow-400' : 'hover:bg-white/5 text-gray-300'}`}
+                  >
+                    <m.icon size={18} className="mr-3" /> {m.label}
+                    <ChevronDown size={16} className={`ml-auto transition-transform duration-200 ${isLaporanOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  
+                  {isLaporanOpen && (
+                    <div className="bg-[#0c331e] py-2 space-y-1">
+                      {m.subItems.map(sub => (
+                        <button 
+                          key={sub.id} 
+                          onClick={() => setActiveMenu(sub.id)}
+                          className={`w-full text-left pl-14 py-2 text-sm transition-colors ${activeMenu === sub.id ? 'text-yellow-400 font-bold' : 'text-gray-300 hover:text-white hover:bg-white/5'}`}
+                        >
+                          {sub.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            return (
+              <button key={m.id} onClick={() => { setActiveMenu(m.id); setIsLaporanOpen(false); }}
+                className={`w-full flex items-center px-6 py-3 text-sm font-medium transition-colors ${activeMenu === m.id ? 'bg-[#175e38] border-l-4 border-yellow-400' : 'hover:bg-white/5 text-gray-300'}`}
+              >
+                <m.icon size={18} className="mr-3" /> {m.label}
+              </button>
+            );
+          })}
+        </nav>
+        <button onClick={onLogout} className="flex items-center justify-center p-4 bg-red-600/20 hover:bg-red-600/40 text-red-300 transition-colors">
+          <LogOut size={18} className="mr-2" /> Keluar
+        </button>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-grow overflow-y-auto print:overflow-visible print:bg-white">
+        <div className="p-8">
+          {activeMenu === 'dashboard' && <PanitiaDashboard data={data} />}
+          {activeMenu === 'pendaftar' && <PanitiaPendaftar data={data.registrations} />}
+          {activeMenu === 'jadwal' && <PanitiaJadwal data={data.schedules} />}
+          {activeMenu === 'hasil' && <PanitiaHasil data={data} />}
+          {activeMenu === 'koordinator' && <PanitiaKoordinator data={data.coordinators} />}
+          {activeMenu.startsWith('laporan-') && <PanitiaLaporan data={data} reportType={activeMenu.replace('laporan-', '')} />}
+          {activeMenu === 'pengaturan' && <PanitiaPengaturan data={data.settings} />}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function PanitiaDashboard({ data }) {
+  const { registrations, coordinators, results, schedules } = data;
+  const total = registrations.length;
+  const diterima = registrations.filter(r => r.status === 'Diterima').length;
+  const menunggu = registrations.filter(r => r.status === 'Menunggu').length;
+
+  const upcomingSchedules = schedules
+    .filter(s => {
+       const today = new Date();
+       today.setHours(0,0,0,0);
+       return new Date(s.endDate || s.date) >= today;
+    })
+    .sort((a,b) => a.timestamp - b.timestamp)
+    .slice(0, 3); // Ambil 3 jadwal terdekat
+
+  // Logika Monitoring Hasil Lomba
+  const monitoringLomba = LOMBA_LIST.map(lomba => {
+    const verifiedCount = registrations.filter(r => r.status === 'Diterima' && r.competition === lomba).length;
+    const coord = coordinators.find(c => c.competition === lomba);
+    const hasResult = results.some(r => r.competition.startsWith(lomba));
+
+    let statusText = 'Belum Input';
+    let statusClass = 'bg-red-100 text-red-700';
+
+    if (verifiedCount === 0) {
+      statusText = 'Tidak Ada Peserta';
+      statusClass = 'bg-gray-100 text-gray-500';
+    } else if (hasResult) {
+      statusText = 'Sudah Input';
+      statusClass = 'bg-green-100 text-green-700';
+    }
+
+    return {
+      lomba,
+      verifiedCount,
+      coordName: coord ? coord.name : 'Belum Ditugaskan',
+      statusText,
+      statusClass
+    };
+  });
+
+  return (
+    <div>
+      <h1 className="text-2xl font-bold text-gray-800 mb-6">Dashboard Panitia</h1>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-blue-500">
+          <p className="text-sm text-gray-500 font-medium">Total Pendaftar</p>
+          <p className="text-3xl font-bold text-gray-800">{total}</p>
+        </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-green-500">
+          <p className="text-sm text-gray-500 font-medium">Diverifikasi (Diterima)</p>
+          <p className="text-3xl font-bold text-green-600">{diterima}</p>
+        </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-amber-500">
+          <p className="text-sm text-gray-500 font-medium">Menunggu Verifikasi</p>
+          <p className="text-3xl font-bold text-amber-600">{menunggu}</p>
+        </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-purple-500">
+          <p className="text-sm text-gray-500 font-medium">Total Koordinator</p>
+          <p className="text-3xl font-bold text-purple-600">{coordinators.length}</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Kolom Kiri: Jadwal (1/3 Lebar) */}
+        <div className="lg:col-span-1 bg-white p-6 rounded-xl shadow-sm border border-gray-100 h-fit">
+          <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center">
+            <Calendar size={20} className="mr-2 text-[#175e38]" /> Jadwal Mendatang
+          </h2>
+          <div className="flex flex-col gap-4">
+            {upcomingSchedules.length === 0 ? (
+              <p className="text-gray-500 text-sm">Tidak ada jadwal kegiatan mendatang.</p>
+            ) : (
+              upcomingSchedules.map(s => (
+                <div key={s.id} className="p-3 rounded-lg border border-green-100 bg-green-50/50 border-l-4 border-l-[#175e38]">
+                  <h3 className="font-bold text-gray-800 mb-1 text-sm">{s.title}</h3>
+                  <p className="text-xs text-gray-600 font-medium">
+                    {s.startDate && s.endDate ? `${s.startDate} s/d ${s.endDate}` : new Date(s.date).toLocaleDateString('id-ID')}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">{s.location}</p>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Kolom Kanan: Monitoring Hasil (2/3 Lebar) */}
+        <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+          <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center">
+            <Trophy size={20} className="mr-2 text-[#175e38]" /> Monitoring Input Hasil Lomba
+          </h2>
+          <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50 sticky top-0">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Cabang Lomba</th>
+                  <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Koordinator</th>
+                  <th className="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Peserta</th>
+                  <th className="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Status Input</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-100">
+                {monitoringLomba.map((item, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-sm font-medium text-gray-800">{item.lomba}</td>
+                    <td className={`px-4 py-3 text-sm ${item.coordName === 'Belum Ditugaskan' ? 'text-gray-400 italic' : 'text-gray-600'}`}>
+                      {item.coordName}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-center font-semibold text-gray-600">{item.verifiedCount}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`inline-block px-3 py-1 text-xs font-bold rounded-full ${item.statusClass}`}>
+                        {item.statusText}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PanitiaPendaftar({ data }) {
+  const [filter, setFilter] = useState('Semua');
+  const [selectedReg, setSelectedReg] = useState(null); // For View modal
+  const [noteModal, setNoteModal] = useState({ show: false, id: '', note: '' });
+  const [editModal, setEditModal] = useState({ show: false, data: null });
+
+  const filteredData = data.filter(r => filter === 'Semua' ? true : r.status === filter).sort((a,b) => b.timestamp - a.timestamp);
+
+  const updateStatus = async (id, status, note = '') => {
+    try {
+      await updateDoc(getDocRef('registrations', id), { status, note });
+    } catch (e) { alert('Error updating status'); }
+  };
+
+  const deleteReg = async (id) => {
+    if(window.confirm('Yakin ingin menghapus pendaftar ini?')) {
+      await deleteDoc(getDocRef('registrations', id));
+    }
+  };
+
+  const submitNote = (e) => {
+    e.preventDefault();
+    updateStatus(noteModal.id, 'Diperbaiki', noteModal.note);
+    setNoteModal({show:false, id:'', note:''});
+  };
+
+  const submitEditData = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const updatedData = {
+      name: fd.get('name'),
+      tempatLahir: fd.get('tempatLahir'),
+      birthDate: fd.get('birthDate'),
+      gender: fd.get('gender'),
+      alamatSantri: fd.get('alamatSantri'),
+      madrasah: fd.get('madrasah'),
+      alamatMadrasah: fd.get('alamatMadrasah'),
+      competition: fd.get('competition'),
+    };
+    
+    try {
+      await updateDoc(getDocRef('registrations', editModal.data.id), updatedData);
+      alert('Data pendaftar berhasil diperbarui!');
+      setEditModal({ show: false, data: null });
+    } catch (err) {
+      alert('Gagal memperbarui data.');
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold text-gray-800">Kelola Pendaftar</h1>
+        <select value={filter} onChange={e=>setFilter(e.target.value)} className="border border-gray-300 rounded-lg p-2 bg-white">
+          <option value="Semua">Semua Status</option>
+          <option value="Menunggu">Menunggu</option>
+          <option value="Diterima">Diterima</option>
+          <option value="Diperbaiki">Diperbaiki</option>
+          <option value="Ditolak">Ditolak</option>
+        </select>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nama & Asal</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lomba</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {filteredData.map(r => (
+              <tr key={r.id} className="hover:bg-gray-50">
+                <td className="px-6 py-4">
+                  <div className="font-semibold text-gray-800">{r.name}</div>
+                  <div className="text-sm text-gray-500">{r.registrationCode || '-'} | {r.madrasah}</div>
+                </td>
+                <td className="px-6 py-4 text-sm text-gray-600">{r.competition}</td>
+                <td className="px-6 py-4">
+                  <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                    ${r.status === 'Diterima' ? 'bg-green-100 text-green-800' : 
+                      r.status === 'Diperbaiki' ? 'bg-yellow-100 text-yellow-800' : 
+                      r.status === 'Ditolak' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'}`}>
+                    {r.status}
+                  </span>
+                </td>
+                <td className="px-6 py-4 text-right text-sm font-medium space-x-2">
+                  <button onClick={()=>setSelectedReg(r)} title="Lihat Detail" className="text-blue-600 hover:text-blue-900 bg-blue-50 p-1.5 rounded"><Eye size={18}/></button>
+                  <button onClick={()=>setEditModal({show:true, data:r})} title="Edit Data" className="text-purple-600 hover:text-purple-900 bg-purple-50 p-1.5 rounded"><Edit size={18}/></button>
+                  <button onClick={()=>updateStatus(r.id, 'Diterima')} title="Terima" className="text-green-600 hover:text-green-900 bg-green-50 p-1.5 rounded"><Check size={18}/></button>
+                  <button onClick={()=>setNoteModal({show:true, id:r.id, note:r.note||''})} title="Minta Perbaikan" className="text-amber-600 hover:text-amber-900 bg-amber-50 p-1.5 rounded"><Edit3 size={18}/></button>
+                  <button onClick={()=>updateStatus(r.id, 'Ditolak')} title="Tolak" className="text-gray-500 hover:text-gray-800 bg-gray-100 p-1.5 rounded"><X size={18}/></button>
+                  <button onClick={()=>deleteReg(r.id)} title="Hapus" className="text-red-600 hover:text-red-900 bg-red-50 p-1.5 rounded"><Trash2 size={18}/></button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filteredData.length === 0 && <div className="p-8 text-center text-gray-500">Tidak ada data pendaftar.</div>}
+      </div>
+
+      {/* Note Modal */}
+      {noteModal.show && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-sm">
+            <h3 className="text-lg font-bold mb-4">Catatan Perbaikan</h3>
+            <form onSubmit={submitNote}>
+              <textarea autoFocus required value={noteModal.note} onChange={e=>setNoteModal({...noteModal, note: e.target.value})} className="w-full border p-2 rounded mb-4" rows="3" placeholder="Masukkan keterangan kenapa harus diperbaiki..."></textarea>
+              <div className="flex justify-end space-x-2">
+                <button type="button" onClick={()=>setNoteModal({show:false, id:'', note:''})} className="px-4 py-2 bg-gray-200 rounded">Batal</button>
+                <button type="submit" className="px-4 py-2 bg-amber-500 text-white rounded">Simpan & Ubah Status</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Modal */}
+      {editModal.show && editModal.data && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4 pb-2 border-b">
+              <h3 className="text-lg font-bold text-gray-800">Edit Data Pendaftar: <span className="text-[#175e38]">{editModal.data.registrationCode}</span></h3>
+              <button onClick={()=>setEditModal({show:false, data:null})} className="text-gray-500 hover:text-gray-800"><X size={20}/></button>
+            </div>
+            <form onSubmit={submitEditData} className="space-y-4 text-left">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Nama Lengkap</label>
+                  <input type="text" name="name" defaultValue={editModal.data.name} required className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38]" />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Cabang Lomba</label>
+                  <select name="competition" defaultValue={editModal.data.competition} required className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38]">
+                    {LOMBA_LIST.map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Tempat Lahir</label>
+                  <input type="text" name="tempatLahir" defaultValue={editModal.data.tempatLahir} required className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38]" />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Tanggal Lahir</label>
+                  <input type="date" name="birthDate" defaultValue={editModal.data.birthDate} required className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38]" />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Jenis Kelamin</label>
+                  <select name="gender" defaultValue={editModal.data.gender} required className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38]">
+                    <option value="Laki-laki">Laki-laki</option>
+                    <option value="Perempuan">Perempuan</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Asal Madrasah</label>
+                  <input type="text" name="madrasah" defaultValue={editModal.data.madrasah} required className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38]" />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Alamat Santri</label>
+                  <textarea name="alamatSantri" defaultValue={editModal.data.alamatSantri} required rows="2" className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38]"></textarea>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Alamat Madrasah</label>
+                  <textarea name="alamatMadrasah" defaultValue={editModal.data.alamatMadrasah} required rows="2" className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38]"></textarea>
+                </div>
+              </div>
+              <div className="flex justify-end space-x-3 mt-6 pt-4 border-t">
+                <button type="button" onClick={()=>setEditModal({show:false, data:null})} className="px-4 py-2 bg-gray-200 text-gray-800 rounded font-semibold hover:bg-gray-300">Batal</button>
+                <button type="submit" className="px-4 py-2 bg-[#175e38] text-white rounded font-semibold hover:bg-[#11462a]">Simpan Perubahan</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* View Modal Terperinci */}
+      {selectedReg && (
+         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+         <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+           <div className="flex justify-between items-center mb-4 pb-2 border-b">
+             <h3 className="text-lg font-bold text-gray-800">Detail Pendaftar</h3>
+             <button onClick={()=>setSelectedReg(null)} className="text-gray-500 hover:text-gray-800"><X size={20}/></button>
+           </div>
+           
+           <div className="bg-gray-100 p-4 rounded text-center mb-6 border">
+              <span className="block text-xs text-gray-500 uppercase tracking-wider mb-1">Nomor Pendaftaran</span>
+              <span className="text-3xl font-bold text-[#175e38]">{selectedReg.registrationCode || '-'}</span>
+           </div>
+
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 text-sm">
+             <div><span className="font-semibold block text-gray-500">Nama Lengkap</span> <span className="text-base font-medium">{selectedReg.name}</span></div>
+             <div><span className="font-semibold block text-gray-500">Tempat, Tanggal Lahir</span> {selectedReg.tempatLahir}, {new Date(selectedReg.birthDate).toLocaleDateString('id-ID')}</div>
+             <div><span className="font-semibold block text-gray-500">Jenis Kelamin</span> {selectedReg.gender}</div>
+             <div><span className="font-semibold block text-gray-500">Cabang Lomba</span> <span className="font-bold text-[#175e38]">{selectedReg.competition}</span></div>
+             
+             <div className="md:col-span-2 border-t pt-4 mt-2"></div>
+
+             <div className="md:col-span-2"><span className="font-semibold block text-gray-500">Alamat Santri</span> {selectedReg.alamatSantri || '-'}</div>
+             <div className="md:col-span-2"><span className="font-semibold block text-gray-500">Asal Madrasah</span> {selectedReg.madrasah}</div>
+             <div className="md:col-span-2"><span className="font-semibold block text-gray-500">Alamat Madrasah</span> {selectedReg.alamatMadrasah || '-'}</div>
+             
+             <div className="md:col-span-2 border-t pt-4 mt-2"></div>
+             
+             <div className="md:col-span-2">
+               <span className="font-semibold block text-gray-500 mb-1">File Akta Kelahiran</span> 
+               <div className="flex items-center p-3 bg-blue-50 border border-blue-100 rounded text-blue-800">
+                 <FileText size={18} className="mr-2"/> {selectedReg.fileNameAkta || 'Tidak ada file dilampirkan'}
+               </div>
+             </div>
+
+             <div className="md:col-span-2"><span className="font-semibold block text-gray-500">Waktu Daftar</span> {new Date(selectedReg.timestamp).toLocaleString('id-ID')}</div>
+           </div>
+
+           <div className="mt-6 p-4 bg-gray-50 rounded border flex justify-between items-center">
+              <div>
+                <span className="text-gray-600">Status saat ini:</span>
+                <strong className={`ml-2 px-3 py-1 rounded-full text-xs text-white ${
+                  selectedReg.status === 'Diterima' ? 'bg-green-600' :
+                  selectedReg.status === 'Ditolak' ? 'bg-red-600' :
+                  selectedReg.status === 'Diperbaiki' ? 'bg-amber-500' : 'bg-blue-500'
+                }`}>{selectedReg.status}</strong>
+              </div>
+              {selectedReg.note && <div className="text-red-500 text-xs max-w-xs text-right">Catatan perbaikan: "{selectedReg.note}"</div>}
+           </div>
+         </div>
+       </div>
+      )}
+    </div>
+  );
+}
+
+function PanitiaJadwal({ data }) {
+  const submitJadwal = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    await addDoc(getCollection('schedules'), {
+      title: fd.get('title'),
+      startDate: fd.get('startDate'),
+      endDate: fd.get('endDate'),
+      date: fd.get('endDate'), // fallback untuk data lama
+      location: fd.get('location'),
+      description: fd.get('description'),
+      timestamp: Date.now()
+    });
+    e.target.reset();
+  };
+
+  const deleteJadwal = async (id) => {
+    if(window.confirm('Hapus jadwal ini?')) await deleteDoc(getDocRef('schedules', id));
+  }
+
+  return (
+    <div className="grid md:grid-cols-3 gap-6">
+      <div className="md:col-span-1 bg-white p-6 rounded-xl shadow-sm h-fit">
+        <h2 className="text-lg font-bold mb-4 border-b pb-2">Tambah Jadwal Baru</h2>
+        <form onSubmit={submitJadwal} className="space-y-3">
+          <input type="text" name="title" required placeholder="Judul Kegiatan" className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38] focus:outline-none" />
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">Tgl Mulai</label>
+              <input type="date" name="startDate" required className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38] focus:outline-none" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">Tgl Selesai</label>
+              <input type="date" name="endDate" required className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38] focus:outline-none" />
+            </div>
+          </div>
+          <input type="text" name="location" required placeholder="Lokasi (mis: Online / Sekretariat)" className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38] focus:outline-none" />
+          <textarea name="description" placeholder="Keterangan singkat (Opsional)" className="w-full border p-2 rounded focus:ring-1 focus:ring-[#175e38] focus:outline-none" rows="2"></textarea>
+          <button type="submit" className="w-full bg-[#175e38] text-white p-2 rounded hover:bg-[#11462a] font-semibold">Simpan Jadwal</button>
+        </form>
+      </div>
+      <div className="md:col-span-2">
+        <h2 className="text-xl font-bold mb-4">Daftar Jadwal</h2>
+        <div className="space-y-3">
+          {data.sort((a,b) => a.timestamp - b.timestamp).map(s => {
+             const today = new Date();
+             today.setHours(0,0,0,0);
+             const scheduleDate = new Date(s.endDate || s.date);
+             const isPast = scheduleDate < today;
+
+             return (
+               <div key={s.id} className={`bg-white p-4 rounded-xl shadow-sm flex justify-between items-center border-l-4 ${isPast ? 'border-gray-300 opacity-60' : 'border-[#175e38]'}`}>
+                 <div>
+                   <div className="flex items-center gap-2 mb-1">
+                     <h3 className="font-bold text-gray-800">{s.title}</h3>
+                     {isPast && <span className="text-[10px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full font-bold">Selesai</span>}
+                   </div>
+                   <p className="text-sm text-gray-500">
+                     {s.startDate && s.endDate ? `${s.startDate} s/d ${s.endDate}` : new Date(s.date).toLocaleDateString('id-ID')} | {s.location}
+                   </p>
+                 </div>
+                 <button onClick={()=>deleteJadwal(s.id)} className="text-red-500 hover:bg-red-50 p-2 rounded-full"><Trash2 size={18}/></button>
+               </div>
+             )
+          })}
+          {data.length === 0 && <p className="text-gray-500 bg-white p-4 rounded text-center border border-dashed">Belum ada jadwal ditambahkan.</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PanitiaKoordinator({ data }) {
+  const submitKoor = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    await addDoc(getCollection('coordinators'), {
+      name: fd.get('name'),
+      competition: fd.get('competition'),
+      waNumber: fd.get('waNumber'),
+      timestamp: Date.now()
+    });
+    e.target.reset();
+  };
+
+  const deleteKoor = async (id) => {
+    if(window.confirm('Hapus koordinator ini?')) await deleteDoc(getDocRef('coordinators', id));
+  }
+
+  return (
+    <div className="grid md:grid-cols-3 gap-6">
+      <div className="md:col-span-1 bg-white p-6 rounded-xl shadow-sm h-fit">
+        <h2 className="text-lg font-bold mb-4 border-b pb-2">Tambah Koordinator</h2>
+        <form onSubmit={submitKoor} className="space-y-3">
+          <input type="text" name="name" required placeholder="Nama Lengkap" className="w-full border p-2 rounded" />
+          <select name="competition" required className="w-full border p-2 rounded bg-white">
+             <option value="">Pilih Cabang Lomba...</option>
+             {LOMBA_LIST.map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+          <div>
+            <input type="text" name="waNumber" required placeholder="No WhatsApp (08...)" className="w-full border p-2 rounded" />
+            <p className="text-xs text-gray-500 mt-1">No. WA digunakan untuk login koordinator.</p>
+          </div>
+          <button type="submit" className="w-full bg-[#175e38] text-white p-2 rounded hover:bg-[#11462a]">Simpan Koordinator</button>
+        </form>
+      </div>
+      <div className="md:col-span-2">
+        <h2 className="text-xl font-bold mb-4">Daftar Koordinator Lomba</h2>
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nama</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Lomba</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">No. WA</th>
+                <th className="px-4 py-3 text-right"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {data.map(c => (
+                <tr key={c.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 font-medium text-gray-800">{c.name}</td>
+                  <td className="px-4 py-3 text-sm text-gray-600">{c.competition}</td>
+                  <td className="px-4 py-3 text-sm text-gray-600">{c.waNumber}</td>
+                  <td className="px-4 py-3 text-right">
+                    <button onClick={()=>deleteKoor(c.id)} className="text-red-500 p-1"><Trash2 size={16}/></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {data.length === 0 && <div className="p-4 text-center text-gray-500">Belum ada data koordinator.</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PanitiaHasil({ data }) {
+  const [selectedLomba, setSelectedLomba] = useState(LOMBA_LIST[0]);
+  const [selectedGender, setSelectedGender] = useState('Putra');
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  const targetGender = selectedGender === 'Putra' ? 'Laki-laki' : 'Perempuan';
+  const fullCompetitionName = `${selectedLomba} ${selectedGender}`;
+
+  const verifiedRegs = data.registrations.filter(r => 
+    r.status === 'Diterima' && 
+    r.competition === selectedLomba &&
+    r.gender === targetGender &&
+    (searchQuery === '' || (r.registrationCode && r.registrationCode.toLowerCase().includes(searchQuery.toLowerCase())))
+  );
+  const lombaResults = data.results.filter(r => r.competition === fullCompetitionName);
+
+  const saveResult = async (regId, rank, score) => {
+    const existing = lombaResults.find(r => r.registrationId === regId);
+    if (existing) {
+      if(!rank && !score) await deleteDoc(getDocRef('results', existing.id));
+      else await updateDoc(getDocRef('results', existing.id), { rank: parseInt(rank)||0, score: parseInt(score)||0 });
+    } else {
+      if(rank || score) {
+        await addDoc(getCollection('results'), {
+          registrationId: regId, competition: fullCompetitionName, rank: parseInt(rank)||0, score: parseInt(score)||0
+        });
+      }
+    }
+  };
+
+  return (
+    <div className="bg-white p-6 rounded-xl shadow-sm">
+       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+         <h2 className="text-xl font-bold">Input/Edit Hasil Lomba (Admin)</h2>
+         <div className="flex gap-2 w-full md:w-auto">
+           <select value={selectedLomba} onChange={e=>setSelectedLomba(e.target.value)} className="border p-2 rounded bg-gray-50 font-semibold w-full md:w-auto">
+             {LOMBA_LIST.map(l => <option key={l} value={l}>{l}</option>)}
+           </select>
+           <select value={selectedGender} onChange={e=>setSelectedGender(e.target.value)} className="border p-2 rounded bg-green-50 text-[#175e38] font-bold w-full md:w-auto">
+             <option value="Putra">Putra (Laki-laki)</option>
+             <option value="Putri">Putri (Perempuan)</option>
+           </select>
+         </div>
+       </div>
+
+       <div className="mb-4">
+         <div className="relative max-w-md">
+           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+             <Search size={18} className="text-gray-400" />
+           </div>
+           <input
+             type="text"
+             placeholder="Cari berdasarkan ID / Nomor Pendaftaran..."
+             value={searchQuery}
+             onChange={(e) => setSearchQuery(e.target.value)}
+             className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-[#175e38] focus:border-[#175e38] sm:text-sm"
+           />
+         </div>
+       </div>
+
+       <div className="overflow-x-auto">
+         <table className="min-w-full divide-y divide-gray-200 border">
+           <thead className="bg-green-50">
+             <tr>
+               <th className="px-4 py-3 text-left font-semibold text-[#175e38]">ID Pendaftar</th>
+               <th className="px-4 py-3 text-left font-semibold text-[#175e38]">Nama Peserta</th>
+               <th className="px-4 py-3 text-left font-semibold text-[#175e38]">Asal Madrasah</th>
+               <th className="px-4 py-3 text-center font-semibold text-[#175e38]">Juara (1,2,3)</th>
+               <th className="px-4 py-3 text-center font-semibold text-[#175e38]">Nilai/Skor</th>
+               <th className="px-4 py-3 text-center font-semibold text-[#175e38]">Aksi</th>
+             </tr>
+           </thead>
+           <tbody className="divide-y divide-gray-200">
+             {verifiedRegs.map(reg => {
+               const res = lombaResults.find(r => r.registrationId === reg.id) || { rank: '', score: '' };
+               return (
+                 <tr key={reg.id}>
+                   <td className="px-4 py-3 font-bold text-[#175e38]">{reg.registrationCode || '-'}</td>
+                   <td className="px-4 py-3">{reg.name}</td>
+                   <td className="px-4 py-3 text-sm text-gray-500">{reg.madrasah}</td>
+                   <td className="px-4 py-3 text-center"><input id={`rank-admin-${reg.id}`} type="number" min="1" max="3" defaultValue={res.rank} className="w-16 border rounded text-center p-1" placeholder="-" /></td>
+                   <td className="px-4 py-3 text-center"><input id={`score-admin-${reg.id}`} type="number" defaultValue={res.score} className="w-20 border rounded text-center p-1" placeholder="0" /></td>
+                   <td className="px-4 py-3 text-center">
+                     <button onClick={() => { 
+                       const r = document.getElementById(`rank-admin-${reg.id}`).value; 
+                       const s = document.getElementById(`score-admin-${reg.id}`).value; 
+                       saveResult(reg.id, r, s); 
+                     }} className="bg-[#175e38] text-white px-3 py-1 rounded text-sm hover:bg-[#11462a]">Simpan</button>
+                   </td>
+                 </tr>
+               )
+             })}
+           </tbody>
+         </table>
+         {verifiedRegs.length === 0 && (
+           <p className="p-4 text-center text-gray-500 border-x border-b">
+             {searchQuery ? 'Peserta dengan ID tersebut tidak ditemukan.' : 'Belum ada peserta yang diterima di cabang lomba ini.'}
+           </p>
+         )}
+       </div>
+    </div>
+  )
+}
+
+function PanitiaLaporan({ data, reportType }) {
+  const [filterLomba, setFilterLomba] = useState('Semua');
+  const [filterGender, setFilterGender] = useState('Semua');
+
+  return (
+    <div className="bg-white p-8 rounded-xl shadow-sm">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 no-print border-b pb-4 gap-4">
+        <h2 className="text-2xl font-bold">Cetak Laporan: {reportType === 'pendaftar' ? 'Pendaftar' : reportType === 'hasil' ? 'Hasil Lomba' : 'Koordinator'}</h2>
+        
+        <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+          {(reportType === 'pendaftar' || reportType === 'hasil') && (
+            <>
+              <select 
+                value={filterLomba} 
+                onChange={e => setFilterLomba(e.target.value)} 
+                className="border border-gray-300 p-2 rounded-lg bg-gray-50 text-sm focus:ring-1 focus:ring-[#175e38] outline-none"
+              >
+                <option value="Semua">Semua Cabang Lomba</option>
+                {LOMBA_LIST.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+              <select 
+                value={filterGender} 
+                onChange={e => setFilterGender(e.target.value)} 
+                className="border border-gray-300 p-2 rounded-lg bg-gray-50 text-sm focus:ring-1 focus:ring-[#175e38] outline-none"
+              >
+                <option value="Semua">Semua Kategori (L/P)</option>
+                <option value="Laki-laki">Putra (Laki-laki)</option>
+                <option value="Perempuan">Putri (Perempuan)</option>
+              </select>
+            </>
+          )}
+          <button onClick={() => window.print()} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg inline-flex items-center justify-center font-semibold shadow-sm transition-colors">
+            <Printer size={18} className="mr-2" /> Cetak / PDF
+          </button>
+        </div>
+      </div>
+
+      {/* Printable Area Content */}
+      <div className="print-area">
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-bold uppercase">Laporan {reportType === 'pendaftar' ? 'Data Pendaftar' : reportType === 'hasil' ? 'Hasil Lomba' : 'Data Koordinator'}</h1>
+          <h2 className="text-lg font-semibold text-gray-600">Pekan Olahraga dan Seni Antar Diniyah (PORSADIN) 2026</h2>
+          
+          {/* Tampilkan info filter di laporan cetak jika difilter */}
+          {(reportType === 'pendaftar' || reportType === 'hasil') && (filterLomba !== 'Semua' || filterGender !== 'Semua') && (
+            <p className="text-sm font-semibold text-[#175e38] mt-2">
+              Kategori: {filterLomba !== 'Semua' ? filterLomba : 'Semua Lomba'} {filterGender !== 'Semua' ? `(${filterGender === 'Laki-laki' ? 'Putra' : 'Putri'})` : ''}
+            </p>
+          )}
+          
+          <p className="text-sm text-gray-500 mt-1">Dicetak pada: {new Date().toLocaleDateString('id-ID')}</p>
+        </div>
+
+        {reportType === 'pendaftar' && (
+          <table className="w-full text-sm border-collapse border border-gray-300">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="border border-gray-300 p-2">No</th>
+                <th className="border border-gray-300 p-2">No Daftar</th>
+                <th className="border border-gray-300 p-2 text-left">Nama Lengkap</th>
+                <th className="border border-gray-300 p-2 text-left">Asal Madrasah</th>
+                <th className="border border-gray-300 p-2">L/P</th>
+                <th className="border border-gray-300 p-2 text-left">Cabang Lomba</th>
+                <th className="border border-gray-300 p-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.registrations
+                .filter(r => filterLomba === 'Semua' ? true : r.competition === filterLomba)
+                .filter(r => filterGender === 'Semua' ? true : r.gender === filterGender)
+                .map((r, i) => (
+                <tr key={r.id}>
+                  <td className="border border-gray-300 p-2 text-center">{i+1}</td>
+                  <td className="border border-gray-300 p-2 text-center font-medium">{r.registrationCode || '-'}</td>
+                  <td className="border border-gray-300 p-2">{r.name}</td>
+                  <td className="border border-gray-300 p-2">{r.madrasah}</td>
+                  <td className="border border-gray-300 p-2 text-center">{r.gender === 'Laki-laki' ? 'L' : 'P'}</td>
+                  <td className="border border-gray-300 p-2">{r.competition}</td>
+                  <td className="border border-gray-300 p-2 text-center">{r.status}</td>
+                </tr>
+              ))}
+              
+              {data.registrations.filter(r => (filterLomba === 'Semua' || r.competition === filterLomba) && (filterGender === 'Semua' || r.gender === filterGender)).length === 0 && (
+                <tr>
+                  <td colSpan="7" className="border border-gray-300 p-4 text-center text-gray-500 italic">
+                    Tidak ada data pendaftar untuk filter yang dipilih.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+
+        {reportType === 'hasil' && (
+          <table className="w-full text-sm border-collapse border border-gray-300">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="border border-gray-300 p-2 text-left">Cabang Lomba</th>
+                <th className="border border-gray-300 p-2 text-center">Juara</th>
+                <th className="border border-gray-300 p-2 text-left">Nama Peserta</th>
+                <th className="border border-gray-300 p-2 text-left">Asal Madrasah</th>
+                <th className="border border-gray-300 p-2 text-center">Nilai</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.results
+                .sort((a,b) => a.competition.localeCompare(b.competition) || a.rank - b.rank)
+                .filter(res => {
+                  const reg = data.registrations.find(r => r.id === res.registrationId);
+                  if(!reg) return false;
+                  const matchLomba = filterLomba === 'Semua' ? true : reg.competition === filterLomba;
+                  const matchGender = filterGender === 'Semua' ? true : reg.gender === filterGender;
+                  return matchLomba && matchGender;
+                })
+                .map((res) => {
+                const reg = data.registrations.find(r => r.id === res.registrationId);
+                if(!reg) return null;
+                return (
+                  <tr key={res.id}>
+                    <td className="border border-gray-300 p-2 font-semibold">{res.competition}</td>
+                    <td className="border border-gray-300 p-2 text-center font-bold">{res.rank}</td>
+                    <td className="border border-gray-300 p-2">{reg.name}</td>
+                    <td className="border border-gray-300 p-2">{reg.madrasah}</td>
+                    <td className="border border-gray-300 p-2 text-center">{res.score}</td>
+                  </tr>
+                )
+              })}
+              
+              {data.results.filter(res => {
+                  const reg = data.registrations.find(r => r.id === res.registrationId);
+                  if(!reg) return false;
+                  return (filterLomba === 'Semua' || reg.competition === filterLomba) && (filterGender === 'Semua' || reg.gender === filterGender);
+              }).length === 0 && (
+                <tr>
+                  <td colSpan="5" className="border border-gray-300 p-4 text-center text-gray-500 italic">
+                    Tidak ada data hasil lomba untuk filter yang dipilih.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+
+        {reportType === 'koordinator' && (
+          <table className="w-full text-sm border-collapse border border-gray-300">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="border border-gray-300 p-2 w-12 text-center">No</th>
+                <th className="border border-gray-300 p-2 text-left">Nama Koordinator</th>
+                <th className="border border-gray-300 p-2 text-left">Cabang Lomba Ditugaskan</th>
+                <th className="border border-gray-300 p-2 text-left">Nomor WhatsApp</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.coordinators.map((c, i) => (
+                <tr key={c.id}>
+                  <td className="border border-gray-300 p-2 text-center">{i+1}</td>
+                  <td className="border border-gray-300 p-2 font-medium">{c.name}</td>
+                  <td className="border border-gray-300 p-2">{c.competition}</td>
+                  <td className="border border-gray-300 p-2">{c.waNumber}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        
+        <div className="mt-12 text-right">
+          <p className="mb-16">Panitia Pelaksana PORSADIN 2026,</p>
+          <p className="font-bold border-b border-black inline-block min-w-[200px]"></p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PanitiaPengaturan({ data }) {
+  const [loading, setLoading] = useState(false);
+
+  const saveSettings = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    const fd = new FormData(e.target);
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'main'), {
+      isOpen: fd.get('isOpen') === 'true',
+      minBirthDate: fd.get('minBirthDate')
+    });
+    setLoading(false);
+    alert('Pengaturan berhasil disimpan!');
+  };
+
+  return (
+    <div className="max-w-2xl bg-white p-8 rounded-xl shadow-sm border-t-4 border-[#175e38]">
+      <h2 className="text-2xl font-bold mb-6">Pengaturan Sistem</h2>
+      <form onSubmit={saveSettings} className="space-y-6">
+        <div className="p-4 bg-gray-50 border rounded-lg">
+          <label className="block text-sm font-bold text-gray-700 mb-2">Status Pendaftaran Publik</label>
+          <div className="flex space-x-4">
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input type="radio" name="isOpen" value="true" defaultChecked={data.isOpen} className="w-4 h-4 text-[#175e38]" />
+              <span>Buka Pendaftaran</span>
+            </label>
+            <label className="flex items-center space-x-2 cursor-pointer text-red-600">
+              <input type="radio" name="isOpen" value="false" defaultChecked={!data.isOpen} className="w-4 h-4 text-red-600" />
+              <span>Tutup Pendaftaran</span>
+            </label>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">Jika ditutup, publik tidak dapat mengisi formulir pendaftaran.</p>
+        </div>
+
+        <div className="p-4 bg-gray-50 border rounded-lg">
+          <label className="block text-sm font-bold text-gray-700 mb-2">Batas Usia Maksimal (Tanggal Lahir Paling Tua)</label>
+          <input type="date" name="minBirthDate" defaultValue={data.minBirthDate} required className="w-full md:w-1/2 border p-2 rounded" />
+          <p className="text-xs text-gray-500 mt-2">
+            Contoh: Jika diatur 1 Januari 2011, maka peserta kelahiran 2010 (lebih tua) tidak bisa mendaftar, sedangkan kelahiran 2012, 2020, dst (lebih muda) diperbolehkan.
+          </p>
+        </div>
+
+        <button type="submit" disabled={loading} className="bg-[#175e38] text-white px-6 py-2 rounded-lg font-bold hover:bg-[#11462a]">
+          {loading ? 'Menyimpan...' : 'Simpan Pengaturan'}
+        </button>
+      </form>
+    </div>
+  )
+}
+
+// --- KOORDINATOR VIEW ---
+function KoordinatorView({ onLogout, session, data }) {
+  const coord = session.data;
+  const [selectedGender, setSelectedGender] = useState('Putra');
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  const targetGender = selectedGender === 'Putra' ? 'Laki-laki' : 'Perempuan';
+  const fullCompetitionName = `${coord.competition} ${selectedGender}`;
+
+  const verifiedRegs = data.registrations.filter(r => 
+    r.status === 'Diterima' && 
+    r.competition === coord.competition &&
+    r.gender === targetGender &&
+    (searchQuery === '' || (r.registrationCode && r.registrationCode.toLowerCase().includes(searchQuery.toLowerCase())))
+  );
+  const lombaResults = data.results.filter(r => r.competition === fullCompetitionName);
+
+  const saveResult = async (regId, rank, score) => {
+    const existing = lombaResults.find(r => r.registrationId === regId);
+    if (existing) {
+      if(!rank && !score) await deleteDoc(getDocRef('results', existing.id));
+      else await updateDoc(getDocRef('results', existing.id), { rank: parseInt(rank)||0, score: parseInt(score)||0 });
+    } else {
+      if(rank || score) {
+        await addDoc(getCollection('results'), {
+          registrationId: regId, competition: fullCompetitionName, rank: parseInt(rank)||0, score: parseInt(score)||0
+        });
+      }
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <header className="bg-[#175e38] text-white p-4 flex justify-between items-center shadow-md">
+        <div>
+          <h1 className="font-bold text-xl">Panel Koordinator</h1>
+          <p className="text-sm text-green-200">Login: {coord.name}</p>
+        </div>
+        <button onClick={onLogout} className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm font-bold flex items-center">
+          <LogOut size={16} className="mr-2" /> Keluar
+        </button>
+      </header>
+      
+      <main className="flex-grow p-6 container mx-auto max-w-5xl">
+        <div className="bg-white rounded-xl shadow-lg border-t-4 border-yellow-400 p-6">
+           
+           <div className="flex flex-col md:flex-row justify-between md:items-center mb-6 pb-4 border-b gap-4">
+             <div>
+               <h2 className="text-2xl font-bold text-gray-800 mb-1">Input Hasil Lomba: {coord.competition}</h2>
+               <p className="text-gray-600">Silakan masukkan nilai dan peringkat juara peserta.</p>
+             </div>
+             <div className="flex items-center gap-2 bg-green-50 p-2 rounded-lg border border-green-200">
+               <span className="text-sm font-bold text-[#175e38]">Kategori:</span>
+               <select value={selectedGender} onChange={e=>setSelectedGender(e.target.value)} className="border-0 bg-white p-1.5 rounded text-[#175e38] font-bold focus:ring-2 focus:ring-[#175e38]">
+                 <option value="Putra">Putra (Laki-laki)</option>
+                 <option value="Putri">Putri (Perempuan)</option>
+               </select>
+             </div>
+           </div>
+
+           <div className="mb-4">
+             <div className="relative max-w-md">
+               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                 <Search size={18} className="text-gray-400" />
+               </div>
+               <input
+                 type="text"
+                 placeholder="Cari berdasarkan ID / Nomor Pendaftaran..."
+                 value={searchQuery}
+                 onChange={(e) => setSearchQuery(e.target.value)}
+                 className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-[#175e38] focus:border-[#175e38] sm:text-sm"
+               />
+             </div>
+           </div>
+
+           <div className="overflow-x-auto">
+             <table className="min-w-full divide-y divide-gray-200 border">
+               <thead className="bg-green-50">
+                 <tr>
+                   <th className="px-4 py-3 text-left font-semibold text-[#175e38]">ID Pendaftar</th>
+                   <th className="px-4 py-3 text-left font-semibold text-[#175e38]">Nama Peserta</th>
+                   <th className="px-4 py-3 text-left font-semibold text-[#175e38]">Asal Madrasah</th>
+                   <th className="px-4 py-3 text-center font-semibold text-[#175e38]">Juara (1/2/3)</th>
+                   <th className="px-4 py-3 text-center font-semibold text-[#175e38]">Nilai/Skor</th>
+                   <th className="px-4 py-3 text-center font-semibold text-[#175e38]">Aksi</th>
+                 </tr>
+               </thead>
+               <tbody className="divide-y divide-gray-200">
+                 {verifiedRegs.map(reg => {
+                   const res = lombaResults.find(r => r.registrationId === reg.id) || { rank: '', score: '' };
+                   return (
+                     <tr key={reg.id} className="hover:bg-gray-50">
+                       <td className="px-4 py-3 font-bold text-[#175e38]">{reg.registrationCode || '-'}</td>
+                       <td className="px-4 py-3 font-medium">{reg.name}</td>
+                       <td className="px-4 py-3 text-sm text-gray-500">{reg.madrasah}</td>
+                       <td className="px-4 py-3 text-center"><input id={`rank-koor-${reg.id}`} type="number" min="1" max="3" defaultValue={res.rank} className="w-16 border rounded text-center p-2 focus:ring-2 focus:ring-[#175e38]" placeholder="-" /></td>
+                       <td className="px-4 py-3 text-center"><input id={`score-koor-${reg.id}`} type="number" defaultValue={res.score} className="w-20 border rounded text-center p-2 focus:ring-2 focus:ring-[#175e38]" placeholder="0" /></td>
+                       <td className="px-4 py-3 text-center">
+                         <button onClick={(e) => { 
+                           const btn = e.target;
+                           btn.innerHTML = '...';
+                           const r = document.getElementById(`rank-koor-${reg.id}`).value;
+                           const s = document.getElementById(`score-koor-${reg.id}`).value;
+                           saveResult(reg.id, r, s).then(()=> btn.innerHTML='Simpan'); 
+                         }} className="bg-[#175e38] text-white px-4 py-1.5 rounded-lg text-sm hover:bg-[#11462a] font-semibold transition-colors">Simpan</button>
+                       </td>
+                     </tr>
+                   )
+                 })}
+               </tbody>
+             </table>
+             {verifiedRegs.length === 0 && (
+               <div className="p-8 text-center text-gray-500 flex flex-col items-center border-x border-b">
+                 <AlertCircle size={40} className="text-gray-300 mb-2"/>
+                 {searchQuery ? 'Peserta dengan ID tersebut tidak ditemukan.' : `Belum ada peserta yang diterima (diverifikasi) di cabang lomba ${coord.competition}.`}
+               </div>
+             )}
+           </div>
+        </div>
+      </main>
+    </div>
+  );
+}
